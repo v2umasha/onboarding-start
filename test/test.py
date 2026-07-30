@@ -204,6 +204,15 @@ async def test_pwm_freq(dut):
 
     dut._log.info("PWM Frequency test completed successfully")
 
+# Need to use an assertion for pwm -> lets create a helper function
+async def assert_bit_stable(dut, signal, bit, expected, cycles):
+    """Sample a bit every clk cycle across n cycles, asserting it never
+    deviates --> proves that the signal didn't deviate during pwm period """
+    for _ in range(cycles):
+        await RisingEdge(dut.clk)
+        val = (int(signal.value) >> bit) & 1
+        assert val == expected, \
+            f"Expected uo_out[{bit}] to stay {expected}, got {val}"
 
 @cocotb.test()
 async def test_pwm_duty(dut):
@@ -230,24 +239,20 @@ async def test_pwm_duty(dut):
     await send_spi_transaction(dut, 1, 0x00, 0x01)
     await send_spi_transaction(dut, 1, 0x02, 0x01)
 
-    # Edge case: 0x00 -> always low, never toggles, so check level not edges 
+    # Edge case: 0x00 -> always low, never toggles 
     dut._log.info("duty_cycle = 0x00 (always low)")
     await send_spi_transaction(dut, 1, 0x04, 0x00)
-    await ClockCycles(dut.clk, 5000)
-    bit0 = (int(dut.uo_out.value) >> 0) & 1
-    assert bit0 == 0, f"Expected uo_out[0] low at duty=0x00, got {bit0}"
+    await assert_bit_stable(dut, dut.uo_out, 0, 0, cycles=3500)
 
     # Edge case: 0xFF -> forced always high, never toggles 
     dut._log.info("duty_cycle = 0xFF (always high)")
     await send_spi_transaction(dut, 1, 0x04, 0xFF)
-    await ClockCycles(dut.clk, 5000)
-    bit0 = (int(dut.uo_out.value) >> 0) & 1
-    assert bit0 == 1, f"Expected uo_out[0] high at duty=0xFF, got {bit0}"
+    await assert_bit_stable(dut, dut.uo_out, 0, 1, cycles=3500)
 
     # Sweep mid-range values 
     for duty_val in [0x20, 0x40, 0x80, 0xC0, 0xE0]:
         await send_spi_transaction(dut, 1, 0x04, duty_val)
-        await ClockCycles(dut.clk, 1000)  # let old duty's tail clear before measuring
+        await ClockCycles(dut.clk, 1000)    #clear 
 
         await wait_for_bit_edge(dut, dut.uo_out, 0, rising=True)
         t_rise1 = cocotb.utils.get_sim_time(units="sec")
@@ -268,9 +273,7 @@ async def test_pwm_duty(dut):
     #  Enable/PWM-mode interaction: output-enable=0 must force output low
     # regardless of PWM mode or duty cycle (enable takes precedence)
     dut._log.info("Testing output-enable=0 overrides PWM")
-    await send_spi_transaction(dut, 1, 0x00, 0x00)  # disable output on bit 0
-    await ClockCycles(dut.clk, 5000)
-    bit0 = (int(dut.uo_out.value) >> 0) & 1
-    assert bit0 == 0, f"Expected uo_out[0] low when output-enable=0, got {bit0}"
+    await send_spi_transaction(dut, 1, 0x00, 0x00)
+    await assert_bit_stable(dut, dut.uo_out, 0, 0, cycles=3500)
 
     dut._log.info("PWM Duty Cycle test completed successfully")
